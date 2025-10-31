@@ -1,117 +1,173 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Camera Auto Rotate Capture</title>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Camera Capture — Auto Rotate + Toggle Button</title>
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, Roboto, Arial; padding: 1rem; background:#f8f9fa; }
+    video, canvas { border: 1px solid #ccc; border-radius:10px; max-width:100%; height:auto; display:block; margin:auto; }
+    .controls { margin-bottom: 1rem; display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; justify-content:center; }
+    .note { color:#555; font-size:0.9rem; margin-top:1rem; text-align:center; }
+  </style>
 </head>
-<body class="p-4 bg-light">
+<body>
 
-  <div class="container text-center">
-    <h4 class="mb-3">Auto Rotate Camera Capture</h4>
+<div class="container text-center">
+  <h4 class="mb-3">Auto Rotate Camera Capture</h4>
 
-    <div class="mb-3">
-      <select id="camera-select" class="form-select w-auto d-inline-block"></select>
-      <button id="camera-btn" class="btn btn-sm btn-primary ms-2">Take</button>
-      <input type="hidden" id="captured_image">
-    </div>
-
-    <video id="camera" width="420" height="240" autoplay style="display:none; border:1px solid #ccc; border-radius:10px;"></video>
-    <canvas id="snapshot" style="display:none; max-width:100%; border:1px solid #ccc; border-radius:10px;"></canvas>
+  <div class="controls">
+    <select id="camera-select" class="form-select w-auto d-inline-block"></select>
+    <button id="camera-btn" class="btn btn-sm btn-primary ms-2">Take</button>
+    <button id="download" class="btn btn-sm btn-secondary" disabled>Download</button>
+    <input type="hidden" id="captured_image">
   </div>
 
-  <script>
-    $(document).ready(function () {
-      let stream = null, currentDeviceId = null;
-      const video = document.getElementById("camera");
-      const canvas = document.getElementById("snapshot");
-      const btn = document.getElementById("camera-btn");
-      const cameraSelect = document.getElementById("camera-select");
-      const hiddenInput = document.getElementById("captured_image");
+  <video id="video" width="420" height="240" autoplay playsinline muted style="display:none;"></video>
+  <canvas id="canvas" style="display:none;"></canvas>
 
-      async function populateCameraOptions() {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(d => d.kind === "videoinput");
-        cameraSelect.innerHTML = '';
-        videoDevices.forEach((d, i) => {
-          const opt = document.createElement("option");
-          opt.value = d.deviceId;
-          opt.text = d.label || `Camera ${i + 1}`;
-          cameraSelect.appendChild(opt);
-        });
-        if (videoDevices.length > 0) currentDeviceId = videoDevices[0].deviceId;
-      }
+  <div class="note">
+    Automatically detects portrait/landscape and rotates the image correctly.
+  </div>
+</div>
 
-      async function startCamera(deviceId) {
-        if (stream) stream.getTracks().forEach(track => track.stop());
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: deviceId ? { deviceId: { exact: deviceId } } : true
-        });
-        video.srcObject = stream;
-        video.style.display = 'block';
-        canvas.style.display = 'none';
-      }
+<script>
+$(document).ready(function() {
+  const video = document.getElementById("video");
+  const canvas = document.getElementById("canvas");
+  const btn = document.getElementById("camera-btn");
+  const cameraSelect = document.getElementById("camera-select");
+  const hiddenInput = document.getElementById("captured_image");
+  const downloadBtn = document.getElementById("download");
 
-      navigator.mediaDevices.getUserMedia({ video: true })
-        .then(() => populateCameraOptions())
-        .catch(() => alert("Camera permission denied."));
+  let stream = null, currentDeviceId = null;
 
-      cameraSelect.addEventListener("change", () => {
-        currentDeviceId = cameraSelect.value;
-        startCamera(currentDeviceId);
-      });
-
-      btn.addEventListener("click", async () => {
-        const state = btn.getAttribute("data-state") || "idle";
-
-        if (state === "idle") {
-          await startCamera(currentDeviceId);
-          btn.setAttribute("data-state", "streaming");
-          btn.textContent = "Capture";
-          btn.className = "btn btn-sm btn-success";
-          cameraSelect.style.display = "none";
-        } else if (state === "streaming") {
-          const ctx = canvas.getContext("2d");
-          const vw = video.videoWidth || 420;
-          const vh = video.videoHeight || 240;
-
-          // ✅ Detect device orientation
-          const isLandscape = screen.orientation?.type?.includes("landscape") || window.innerWidth > window.innerHeight;
-
-          if (isLandscape) {
-            canvas.width = vw;
-            canvas.height = vh;
-            ctx.drawImage(video, 0, 0, vw, vh);
-          } else {
-            canvas.width = vh;
-            canvas.height = vw;
-            ctx.save();
-            ctx.translate(canvas.width / 2, canvas.height / 2);
-            ctx.rotate(Math.PI / 2); // rotate 90 degrees
-            ctx.drawImage(video, -vh / 2, -vw / 2, vh, vw);
-            ctx.restore();
-          }
-
-          canvas.style.display = "block";
-          hiddenInput.value = canvas.toDataURL("image/png");
-
-          if (stream) stream.getTracks().forEach(track => track.stop());
-          video.style.display = "none";
-          btn.setAttribute("data-state", "captured");
-          btn.textContent = "Remove";
-          btn.className = "btn btn-sm btn-danger";
-        } else if (state === "captured") {
-          canvas.style.display = "none";
-          hiddenInput.value = "";
-          btn.setAttribute("data-state", "idle");
-          btn.textContent = "Take";
-          btn.className = "btn btn-sm btn-primary";
-          cameraSelect.style.display = "";
-        }
-      });
+  // Get list of available cameras
+  async function populateCameraOptions() {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    const videoDevices = devices.filter(d => d.kind === "videoinput");
+    cameraSelect.innerHTML = "";
+    videoDevices.forEach((d, i) => {
+      const opt = document.createElement("option");
+      opt.value = d.deviceId;
+      opt.text = d.label || `Camera ${i + 1}`;
+      cameraSelect.appendChild(opt);
     });
-  </script>
+    if (videoDevices.length > 0) currentDeviceId = videoDevices[0].deviceId;
+  }
+
+  // Start camera stream
+  async function startCamera(deviceId) {
+    if (stream) stream.getTracks().forEach(track => track.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      video: deviceId ? { deviceId: { exact: deviceId } } : { facingMode: "environment" }
+    });
+    video.srcObject = stream;
+    video.style.display = "block";
+    canvas.style.display = "none";
+  }
+
+  // Stop camera
+  function stopCamera() {
+    if (stream) {
+      stream.getTracks().forEach(track => track.stop());
+      stream = null;
+    }
+  }
+
+  // Detect rotation angle (0, 90, 180, 270)
+  function getRotationAngle() {
+    if (screen?.orientation?.angle !== undefined) return screen.orientation.angle;
+    if (typeof window.orientation === "number") return (window.orientation + 360) % 360;
+    return 0;
+  }
+
+  // Handle camera select change
+  cameraSelect.addEventListener("change", () => {
+    currentDeviceId = cameraSelect.value;
+    startCamera(currentDeviceId);
+  });
+
+  // Main button click logic (Take → Capture → Remove)
+  btn.addEventListener("click", async () => {
+    const state = btn.getAttribute("data-state") || "idle";
+
+    if (state === "idle") {
+      await startCamera(currentDeviceId);
+      btn.setAttribute("data-state", "streaming");
+      btn.textContent = "Capture";
+      btn.className = "btn btn-sm btn-success";
+      cameraSelect.style.display = "none";
+      downloadBtn.disabled = true;
+
+    } else if (state === "streaming") {
+      const ctx = canvas.getContext("2d");
+      const vw = video.videoWidth || 420;
+      const vh = video.videoHeight || 240;
+      const rotation = getRotationAngle();
+      const rotated = (rotation === 90 || rotation === 270);
+
+      canvas.width = rotated ? vh : vw;
+      canvas.height = rotated ? vw : vh;
+      ctx.save();
+
+      switch (rotation) {
+        case 90:
+          ctx.translate(canvas.width, 0);
+          ctx.rotate(0.5 * Math.PI);
+          break;
+        case 180:
+          ctx.translate(canvas.width, canvas.height);
+          ctx.rotate(Math.PI);
+          break;
+        case 270:
+          ctx.translate(0, canvas.height);
+          ctx.rotate(-0.5 * Math.PI);
+          break;
+      }
+
+      ctx.drawImage(video, 0, 0, vw, vh);
+      ctx.restore();
+
+      canvas.style.display = "block";
+      hiddenInput.value = canvas.toDataURL("image/png");
+      stopCamera();
+      video.style.display = "none";
+
+      btn.setAttribute("data-state", "captured");
+      btn.textContent = "Remove";
+      btn.className = "btn btn-sm btn-danger";
+      downloadBtn.disabled = false;
+
+    } else if (state === "captured") {
+      canvas.style.display = "none";
+      hiddenInput.value = "";
+      btn.setAttribute("data-state", "idle");
+      btn.textContent = "Take";
+      btn.className = "btn btn-sm btn-primary";
+      cameraSelect.style.display = "";
+      downloadBtn.disabled = true;
+    }
+  });
+
+  // Download the captured image
+  downloadBtn.addEventListener("click", () => {
+    const a = document.createElement("a");
+    a.href = hiddenInput.value;
+    a.download = "captured-photo.png";
+    a.click();
+  });
+
+  // On load, request camera permissions
+  navigator.mediaDevices.getUserMedia({ video: true })
+    .then(() => populateCameraOptions())
+    .catch(() => alert("Camera permission denied."));
+
+  // Clean up
+  window.addEventListener("beforeunload", stopCamera);
+});
+</script>
 </body>
 </html>
