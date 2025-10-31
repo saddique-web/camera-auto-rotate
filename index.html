@@ -1,117 +1,249 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Camera Auto Rotate Capture</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://code.jquery.com/jquery-3.6.4.min.js"></script>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <title>Camera Capture — Keep Landscape Photos Landscape</title>
+  <style>
+    body { font-family: system-ui, -apple-system, Roboto, Arial; padding: 1rem; }
+    .controls { margin-bottom: 1rem; display:flex; gap:0.5rem; align-items:center; flex-wrap:wrap; }
+    video, canvas { border: 1px solid #ccc; max-width:100%; height:auto; display:block; }
+    .note { color:#555; font-size:0.9rem; margin-top:0.5rem; }
+    button { padding:.4rem .8rem; }
+  </style>
 </head>
-<body class="p-4 bg-light">
+<body>
+<h1>Camera Capture — Orientation Friendly</h1>
 
-  <div class="container text-center">
-    <h4 class="mb-3">Auto Rotate Camera Capture</h4>
+<div class="controls">
+  <!-- Use capture input (opens device camera on mobile) -->
+  <input id="file" type="file" accept="image/*" capture="environment">
+  <button id="startCam">Start Camera</button>
+  <button id="takePhoto" disabled>Take Photo (from camera)</button>
+  <button id="download" disabled>Download corrected image</button>
+</div>
 
-    <div class="mb-3">
-      <select id="camera-select" class="form-select w-auto d-inline-block"></select>
-      <button id="camera-btn" class="btn btn-sm btn-primary ms-2">Take</button>
-      <input type="hidden" id="captured_image">
-    </div>
+<video id="video" playsinline autoplay muted style="display:none"></video>
+<canvas id="canvas"></canvas>
 
-    <video id="camera" width="420" height="240" autoplay style="display:none; border:1px solid #ccc; border-radius:10px;"></video>
-    <canvas id="snapshot" style="display:none; max-width:100%; border:1px solid #ccc; border-radius:10px;"></canvas>
-  </div>
+<div class="note">
+  - You can take a photo with your device camera (file input) or use the live camera (Start Camera → Take Photo). Landscape photos will be shown correctly.
+</div>
 
-  <script>
-    $(document).ready(function () {
-      let stream = null, currentDeviceId = null;
-      const video = document.getElementById("camera");
-      const canvas = document.getElementById("snapshot");
-      const btn = document.getElementById("camera-btn");
-      const cameraSelect = document.getElementById("camera-select");
-      const hiddenInput = document.getElementById("captured_image");
+<!-- exif-js to read orientation from image files (JPEG from file input) -->
+<script src="https://cdn.jsdelivr.net/npm/exif-js"></script>
+<script>
+  // Elements
+  const input = document.getElementById('file');
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('canvas');
+  const ctx = canvas.getContext('2d');
+  const startCamBtn = document.getElementById('startCam');
+  const takePhotoBtn = document.getElementById('takePhoto');
+  const downloadBtn = document.getElementById('download');
 
-      async function populateCameraOptions() {
-        const devices = await navigator.mediaDevices.enumerateDevices();
-        const videoDevices = devices.filter(d => d.kind === "videoinput");
-        cameraSelect.innerHTML = '';
-        videoDevices.forEach((d, i) => {
-          const opt = document.createElement("option");
-          opt.value = d.deviceId;
-          opt.text = d.label || `Camera ${i + 1}`;
-          cameraSelect.appendChild(opt);
-        });
-        if (videoDevices.length > 0) currentDeviceId = videoDevices[0].deviceId;
+  let stream = null;
+
+  // Helper: get current display rotation in degrees (0,90,180,270)
+  function getDisplayRotation() {
+    // Prefer Screen Orientation API
+    if (screen && screen.orientation && typeof screen.orientation.angle === 'number') {
+      return screen.orientation.angle;
+    }
+    // Fallback to window.orientation (some browsers)
+    if (typeof window.orientation === 'number') {
+      return (window.orientation + 360) % 360;
+    }
+    // Default 0
+    return 0;
+  }
+
+  // Draw image to canvas honoring EXIF orientation (for file input)
+  function drawImageWithExif(img, orientation) {
+    const iw = img.naturalWidth;
+    const ih = img.naturalHeight;
+    const rotated = [5,6,7,8].includes(orientation);
+
+    canvas.width = rotated ? ih : iw;
+    canvas.height = rotated ? iw : ih;
+
+    ctx.save();
+
+    switch (orientation) {
+      case 2: // flip horizontal
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(img, 0, 0, iw, ih);
+        break;
+      case 3: // rotate 180
+        ctx.translate(canvas.width, canvas.height);
+        ctx.rotate(Math.PI);
+        ctx.drawImage(img, 0, 0, iw, ih);
+        break;
+      case 4: // flip vertical
+        ctx.translate(0, canvas.height);
+        ctx.scale(1, -1);
+        ctx.drawImage(img, 0, 0, iw, ih);
+        break;
+      case 5: // transpose
+        ctx.rotate(0.5 * Math.PI);
+        ctx.scale(1, -1);
+        ctx.drawImage(img, 0, 0, iw, ih);
+        break;
+      case 6: // rotate 90
+        ctx.translate(canvas.width, 0);
+        ctx.rotate(0.5 * Math.PI);
+        ctx.drawImage(img, 0, 0, iw, ih);
+        break;
+      case 7: // transverse
+        ctx.translate(canvas.width, 0);
+        ctx.rotate(0.5 * Math.PI);
+        ctx.scale(-1, 1);
+        ctx.drawImage(img, 0, 0, iw, ih);
+        break;
+      case 8: // rotate 270
+        ctx.translate(0, canvas.height);
+        ctx.rotate(-0.5 * Math.PI);
+        ctx.drawImage(img, 0, 0, iw, ih);
+        break;
+      default: // 1 - normal
+        ctx.drawImage(img, 0, 0, iw, ih);
+    }
+
+    ctx.restore();
+  }
+
+  // Handle file input (photo taken by camera app or selected)
+  input.addEventListener('change', (ev) => {
+    downloadBtn.disabled = true;
+    const file = ev.target.files && ev.target.files[0];
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      alert('Please select an image file.');
+      return;
+    }
+
+    // Read ArrayBuffer for EXIF
+    const frExif = new FileReader();
+    frExif.onload = function(e) {
+      try {
+        const arrayBuffer = e.target.result;
+        const exif = EXIF.readFromBinaryFile(arrayBuffer) || {};
+        const orientation = exif.Orientation || 1;
+
+        // Read DataURL to load image
+        const frData = new FileReader();
+        frData.onload = function(e2) {
+          const img = new Image();
+          img.onload = function() {
+            drawImageWithExif(img, orientation);
+            downloadBtn.disabled = false;
+          };
+          img.src = e2.target.result;
+        };
+        frData.readAsDataURL(file);
+      } catch (err) {
+        // fallback: load and draw normally
+        const frData = new FileReader();
+        frData.onload = function(e2) {
+          const img = new Image();
+          img.onload = function() {
+            drawImageWithExif(img, 1);
+            downloadBtn.disabled = false;
+          };
+          img.src = e2.target.result;
+        };
+        frData.readAsDataURL(file);
       }
+    };
+    frExif.readAsArrayBuffer(file);
+  });
 
-      async function startCamera(deviceId) {
-        if (stream) stream.getTracks().forEach(track => track.stop());
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: deviceId ? { deviceId: { exact: deviceId } } : true
-        });
-        video.srcObject = stream;
-        video.style.display = 'block';
-        canvas.style.display = 'none';
-      }
-
-      navigator.mediaDevices.getUserMedia({ video: true })
-        .then(() => populateCameraOptions())
-        .catch(() => alert("Camera permission denied."));
-
-      cameraSelect.addEventListener("change", () => {
-        currentDeviceId = cameraSelect.value;
-        startCamera(currentDeviceId);
+  // Start live camera (getUserMedia)
+  startCamBtn.addEventListener('click', async () => {
+    downloadBtn.disabled = true;
+    try {
+      // Prefer environment-facing camera on mobile
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' },
+        audio: false
       });
+      video.srcObject = stream;
+      video.style.display = 'block';
+      takePhotoBtn.disabled = false;
+      // Resize canvas to video size once metadata is available
+      video.addEventListener('loadedmetadata', () => {
+        // keep canvas size in sync but we'll set exact size at capture
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+      }, { once: true });
+    } catch (err) {
+      alert('Could not access camera: ' + err.message);
+    }
+  });
 
-      btn.addEventListener("click", async () => {
-        const state = btn.getAttribute("data-state") || "idle";
+  // Take photo from live video stream and rotate according to device orientation
+  takePhotoBtn.addEventListener('click', () => {
+    if (!video || !video.videoWidth) return;
 
-        if (state === "idle") {
-          await startCamera(currentDeviceId);
-          btn.setAttribute("data-state", "streaming");
-          btn.textContent = "Capture";
-          btn.className = "btn btn-sm btn-success";
-          cameraSelect.style.display = "none";
-        } else if (state === "streaming") {
-          const ctx = canvas.getContext("2d");
-          const vw = video.videoWidth || 420;
-          const vh = video.videoHeight || 240;
+    // video natural size
+    const vw = video.videoWidth;
+    const vh = video.videoHeight;
+    const rotation = getDisplayRotation(); // 0,90,180,270
 
-          // ✅ Detect device orientation
-          const isLandscape = screen.orientation?.type?.includes("landscape") || window.innerWidth > window.innerHeight;
+    // Determine whether rotation swaps width/height
+    const rotated = (rotation === 90 || rotation === 270);
 
-          if (isLandscape) {
-            canvas.width = vw;
-            canvas.height = vh;
-            ctx.drawImage(video, 0, 0, vw, vh);
-          } else {
-            canvas.width = vh;
-            canvas.height = vw;
-            ctx.save();
-            ctx.translate(canvas.width / 2, canvas.height / 2);
-            ctx.rotate(Math.PI / 2); // rotate 90 degrees
-            ctx.drawImage(video, -vh / 2, -vw / 2, vh, vw);
-            ctx.restore();
-          }
+    canvas.width = rotated ? vh : vw;
+    canvas.height = rotated ? vw : vh;
 
-          canvas.style.display = "block";
-          hiddenInput.value = canvas.toDataURL("image/png");
+    ctx.save();
 
-          if (stream) stream.getTracks().forEach(track => track.stop());
-          video.style.display = "none";
-          btn.setAttribute("data-state", "captured");
-          btn.textContent = "Remove";
-          btn.className = "btn btn-sm btn-danger";
-        } else if (state === "captured") {
-          canvas.style.display = "none";
-          hiddenInput.value = "";
-          btn.setAttribute("data-state", "idle");
-          btn.textContent = "Take";
-          btn.className = "btn btn-sm btn-primary";
-          cameraSelect.style.display = "";
-        }
-      });
-    });
-  </script>
+    // Translate/rotate such that the captured image respects the current display rotation.
+    // We assume the camera's video is in the natural sensor orientation and we rotate the canvas for display.
+    switch (rotation) {
+      case 90:
+        ctx.translate(canvas.width, 0);
+        ctx.rotate(0.5 * Math.PI);
+        ctx.drawImage(video, 0, 0, vw, vh);
+        break;
+      case 180:
+        ctx.translate(canvas.width, canvas.height);
+        ctx.rotate(Math.PI);
+        ctx.drawImage(video, 0, 0, vw, vh);
+        break;
+      case 270:
+        ctx.translate(0, canvas.height);
+        ctx.rotate(-0.5 * Math.PI);
+        ctx.drawImage(video, 0, 0, vw, vh);
+        break;
+      default: // 0
+        ctx.drawImage(video, 0, 0, vw, vh);
+    }
+
+    ctx.restore();
+    downloadBtn.disabled = false;
+  });
+
+  // Download corrected image
+  downloadBtn.addEventListener('click', () => {
+    canvas.toBlob((blob) => {
+      if (!blob) return;
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = 'photo-corrected.jpg';
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+    }, 'image/jpeg', 0.92);
+  });
+
+  // Clean up stream on unload
+  window.addEventListener('beforeunload', () => {
+    if (stream) {
+      stream.getTracks().forEach(t => t.stop());
+    }
+  });
+</script>
 </body>
 </html>
